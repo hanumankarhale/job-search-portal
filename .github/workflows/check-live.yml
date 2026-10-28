@@ -1,0 +1,38 @@
+name: Check live site
+
+# Runs a real job search against the deployed site, to confirm the site and
+# every job source work. Run it from the Actions tab.
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Site address
+        default: https://job-search-portal-alpha.vercel.app
+      key:
+        description: PORTAL_KEY, if the site has one
+        default: ''
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Page loads
+        run: curl -fsS -o /dev/null -w "page HTTP %{http_code}\n" "${{ inputs.url }}/"
+      - name: Search function answers
+        run: curl -fsS "${{ inputs.url }}/api/search"; echo
+      - name: Real search (Node.js, 4 years, Pune, last 10 days)
+        run: |
+          curl -sS --max-time 120 -X POST "${{ inputs.url }}/api/search" \
+            -H 'Content-Type: application/json' -H "X-Portal-Key: ${{ inputs.key }}" \
+            -d '{"profile":{"languages":[{"name":"Node.js"}],"skills":["JavaScript","Express","MongoDB"],"targetRoles":["Node.js Developer"],"locations":["Pune"],"yearsExperience":4,"postedWithinDays":10}}' \
+            -o result.json -w "search HTTP %{http_code}\n"
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync("result.json", "utf8"));
+            if (!r.jobs) { console.log(r); process.exit(1); }
+            console.log("Searched:", r.plan.queries.join(", "), "in", r.plan.location, "within", r.plan.maxAgeDays, "days");
+            for (const [k, v] of Object.entries(r.report)) console.log(` ${k}: ${v.ok ? v.count + " jobs" : "FAILED " + v.error}`);
+            console.log(`${r.jobs.length} jobs. Best matches:`);
+            for (const j of r.jobs.slice(0, 8)) console.log(` ${j.fit.score}  ${j.title} | ${j.company} | ${j.location} | ${j.postedAt ? j.postedAt.slice(0, 10) : "no date"}`);
+            if (!Object.values(r.report).some((v) => v.ok)) process.exit(1);
+          '
