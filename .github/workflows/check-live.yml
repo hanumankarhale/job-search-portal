@@ -25,6 +25,10 @@ jobs:
           code=$(curl -sS -o page.html -w "%{http_code}" "${{ inputs.url }}/")
           echo "::notice title=Page::HTTP $code, $(wc -c < page.html) bytes: $(head -c 200 page.html | tr -d "\n")"
           [ "$code" = 200 ]
+      - name: Vercel Analytics script is served
+        run: |
+          code=$(curl -sS -o /dev/null -w "%{http_code}" "${{ inputs.url }}/_vercel/insights/script.js")
+          echo "::notice title=Analytics::/_vercel/insights/script.js HTTP $code"
       - name: Search function answers
         run: |
           code=$(curl -sS -o info.json -w "%{http_code}" "${{ inputs.url }}/api/search")

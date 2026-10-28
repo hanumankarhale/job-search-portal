@@ -32,7 +32,14 @@ const out = template.replace('/*__LIB__*/', () => bundle);
 
 // dist/ is the claude.ai artifact; web/ is the Vercel site, which needs a
 // full document around the same page.
-const site = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n<style>body{margin:0}</style>\n</head>\n<body>\n${out}\n</body>\n</html>\n`;
+// The site also loads Vercel Web Analytics (cookieless page-view counts),
+// served by Vercel itself at /_vercel/insights once it is enabled for the
+// project in the Vercel dashboard.
+const analytics = [
+  '<script>window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };</script>',
+  '<script defer src="/_vercel/insights/script.js"></script>',
+].join('\n');
+const site = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n<style>body{margin:0}</style>\n${analytics}\n</head>\n<body>\n${out}\n</body>\n</html>\n`;
 for (const [dir, file, html] of [['dist', 'job-portal.html', out], [path.join('..', 'web'), 'index.html', site]]) {
   const target = path.join(__dirname, dir, file);
   fs.mkdirSync(path.dirname(target), { recursive: true });
