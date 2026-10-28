@@ -117,8 +117,36 @@ npm test
 
 To add a job board, add an entry to `SOURCES` in `lib/sources.js` that returns raw jobs with `title`, `company`, `location`, `remote`, `url` and `description`.
 
-## Hosted version
+## Put it online with Vercel
 
-`online/` holds a single-page version that runs as a claude.ai artifact. Build it with `node online/build.js`, which bundles the same `lib/` scoring and letter code into `online/dist/job-portal.html`.
+The portal deploys to Vercel as a static page plus two serverless functions:
+- `api/search` searches the job boards for your profile.
+- `api/letter` has Claude write cover letters, if you add an Anthropic API key.
 
-The hosted page can't call job board APIs: the artifact sandbox blocks requests to outside sites. Instead it links straight to searches on LinkedIn, Naukri, Indeed, foundit, Glassdoor, Google Jobs, Remote OK and Remotive, built from your profile. You paste the jobs you like back in to score them. Signed in on claude.ai, your profile, jobs and applications are saved privately to your account. Claude can rewrite each cover letter from inside the page.
+Your profile, jobs and applications stay in your browser.
+
+1. Go to https://vercel.com/new and import the GitHub repo `cerebrumtech/SyncLMS`.
+2. Under **Root Directory**, choose `job-portal`. Leave the framework preset as **Other**. `vercel.json` already sets the build command and output folder.
+3. Optional, under **Environment Variables**:
+   - `PORTAL_KEY`: any password. The deployed site will ask for it before searching, so strangers can't use your deployment to run searches.
+   - `ANTHROPIC_API_KEY`: turns on "Rewrite with Claude" for cover letters.
+   - `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` and `ADZUNA_COUNTRY=in`: adds Adzuna's Indian listings.
+4. Click **Deploy**. Vercel shows the site address when it finishes.
+
+Open the site and fill in your profile: programming languages, skills, job titles, city, years of experience and "posted within" days. When you save, the portal searches LinkedIn, Remotive, Remote OK, Arbeitnow and Jobicy and fills your job list. It searches again whenever you open it, at most every 6 hours, and **Search now** runs one straight away.
+
+To try the Vercel version on your own computer, run these from `job-portal/`:
+
+```bash
+node online/build.js
+```
+
+```bash
+node web-dev.js
+```
+
+Then open http://localhost:3000.
+
+## claude.ai artifact version
+
+`node online/build.js` also writes `online/dist/job-portal.html`, the same page packaged for claude.ai artifacts. That version can't reach job sites, so it only scores and prepares applications for jobs you add yourself.

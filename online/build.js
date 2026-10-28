@@ -30,7 +30,12 @@ const template = fs.readFileSync(path.join(__dirname, 'page.html'), 'utf8');
 if (!template.includes('/*__LIB__*/')) throw new Error('page.html is missing the /*__LIB__*/ placeholder');
 const out = template.replace('/*__LIB__*/', () => bundle);
 
-fs.mkdirSync(path.join(__dirname, 'dist'), { recursive: true });
-const target = path.join(__dirname, 'dist', 'job-portal.html');
-fs.writeFileSync(target, out);
-console.log(`Wrote ${path.relative(process.cwd(), target)} (${(out.length / 1024).toFixed(1)} KB)`);
+// dist/ is the claude.ai artifact; web/ is the Vercel site, which needs a
+// full document around the same page.
+const site = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n<style>body{margin:0}</style>\n</head>\n<body>\n${out}\n</body>\n</html>\n`;
+for (const [dir, file, html] of [['dist', 'job-portal.html', out], [path.join('..', 'web'), 'index.html', site]]) {
+  const target = path.join(__dirname, dir, file);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, html);
+  console.log(`Wrote ${path.relative(process.cwd(), target)} (${(html.length / 1024).toFixed(1)} KB)`);
+}

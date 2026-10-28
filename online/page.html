@@ -373,9 +373,9 @@ const { templateCoverLetter, templatePitch, cvSummary, claudePrompt, parseClaude
 const { guardPosting, extractEmails } = require('./text');
 const { searchPlan } = require('./plan');
 
-// Scheduled task that searches the job boards and adds results to this page's store.
-const TRIGGER_ID = 'trig_01K24V7bwMjByPsKyNdd5E7Q';
-const SCHEDULE_TEXT = 'twice a day, at 9:47 and 17:47 India time';
+// On the web version (Vercel), api/search runs the job board searches.
+// The page calls it on open when the last search is older than this.
+const AUTO_HOURS = 6;
 const SOURCE_NAMES = { linkedin: 'LinkedIn', remotive: 'Remotive', remoteok: 'Remote OK', arbeitnow: 'Arbeitnow', jobicy: 'Jobicy', adzuna: 'Adzuna', manual: 'Added by you' };
 
 // ---------- helpers ----------
@@ -476,7 +476,7 @@ const Store = {
   },
 };
 
-const state = { profile: { ...DEFAULT_PROFILE }, jobs: [], apps: [], tab: 'profile', sample: null, downloads: null, mcp: null, sync: null, searching: false };
+const state = { profile: { ...DEFAULT_PROFILE }, jobs: [], apps: [], tab: 'profile', sample: null, downloads: null, server: null, sync: null, searching: false, needKey: false };
 
 async function persist(kind, item, op = 'put') {
   try { await (op === 'put' ? Store.put(kind, item) : Store.remove(kind, item.id)); }
@@ -587,7 +587,7 @@ $('#saveProfile').addEventListener('click', async () => {
     await Store.saveProfile(state.profile);
     $('#ageFilter').value = String(state.profile.postedWithinDays);
     showTab('jobs');
-    if (state.mcp) searchNow();
+    if (state.server) searchNow();
     else toast('Profile saved. Job scores are updated.');
   } catch (e) { toast(`Could not save: ${e.message || e}`); }
 });
@@ -621,15 +621,21 @@ function renderAuto() {
   const filled = p.skills.length || p.languages.length || p.targetRoles.length;
   const plan = searchPlan(p);
   $('#autoPlan').textContent = filled
-    ? `Looking for “${plan.queries.join('”, “')}” in ${plan.location}, posted in the last ${plan.maxAgeDays} day${plan.maxAgeDays === 1 ? '' : 's'}, ${p.yearsExperience ? `around ${p.yearsExperience} years of experience, ` : ''}on LinkedIn, Remotive, Remote OK, Arbeitnow and Jobicy, ${SCHEDULE_TEXT}. New matches are added to your list below.`
+    ? `Looking for “${plan.queries.join('”, “')}” in ${plan.location}, posted in the last ${plan.maxAgeDays} day${plan.maxAgeDays === 1 ? '' : 's'}, ${p.yearsExperience ? `around ${p.yearsExperience} years of experience, ` : ''}on ${state.server ? state.server.sources.join(', ') : 'LinkedIn, Remotive, Remote OK, Arbeitnow and Jobicy'}. The portal searches when you save your profile and whenever you open it, at most every ${AUTO_HOURS} hours. New matches are added to your list below.`
     : 'Fill in your profile and the portal will search the job boards for you.';
-  $('#searchNowBtn').hidden = !(state.mcp && filled);
+  $('#searchNowBtn').hidden = !(state.server && filled);
   $('#searchNowBtn').disabled = state.searching;
   $('#searchNowBtn').textContent = state.searching ? 'Searching…' : 'Search now';
   const s = state.sync;
   let status;
-  if (Store.mode !== 'cloud') status = h('p', { class: 'muted' }, 'Automatic search saves jobs to your claude.ai account. Open this page while signed in to claude.ai to use it.');
-  else if (!s) status = h('p', { class: 'muted' }, state.searching ? 'The first search is running. Jobs appear here in a few minutes.' : 'No search has run yet. The first one runs at the next scheduled time' + (state.mcp ? ', or press Search now.' : '.'));
+  if (!state.server) status = h('p', { class: 'muted' }, 'Automatic search runs on the web version of the portal, which can reach the job sites. Here you can still score and apply to jobs you add yourself.');
+  else if (state.needKey) {
+    const key = h('input', { type: 'password', placeholder: 'Access key', 'aria-label': 'Access key', style: 'max-width:240px' });
+    status = h('div', { class: 'btnrow' }, h('span', {}, 'This portal is protected. Enter its access key to search.'), key,
+      h('button', { class: 'btn small', onclick: () => { Store.local('key', key.value.trim()); state.needKey = false; searchNow(); } }, 'Save key and search'));
+  }
+  else if (state.searching) status = h('p', { class: 'muted' }, 'Searching the job boards. This takes up to a minute.');
+  else if (!s) status = h('p', { class: 'muted' }, 'No search has run yet. Press Search now.');
   else {
     const srcs = Object.entries(s.report || {}).map(([k, v]) => h('span', {}, `${SOURCE_NAMES[k] || k}: ${v.ok ? v.count : 'failed'}`));
     const when = relTime(s.lastRun) === 'today' ? `today at ${new Date(s.lastRun).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : relTime(s.lastRun);
@@ -642,18 +648,39 @@ function renderAuto() {
   $('#autoStatus').replaceChildren(status);
 }
 
+async function serverCall(path, body) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Portal-Key': Store.local('key') || '' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status });
+  return data;
+}
+
 async function searchNow() {
-  if (!state.mcp || state.searching) return;
+  if (!state.server || state.searching) return;
   state.searching = true;
   renderAuto();
+  const now = new Date().toISOString();
   try {
-    await state.mcp.callTool('Claude Code Remote', 'fire_trigger', { trigger_id: TRIGGER_ID });
-    toast('Search started. New jobs appear here in a few minutes.');
+    const r = await serverCall('api/search', { profile: state.profile });
+    const known = new Set(state.jobs.map((j) => j.id));
+    const fresh = r.jobs.filter((j) => !known.has(j.id)).map(({ fit, ...j }) => ({ ...j, auto: true, addedAt: now }));
+    state.jobs = [...fresh, ...state.jobs].slice(0, 400);
+    Store.local('jobs', state.jobs);
+    const ok = Object.values(r.report).some((v) => v.ok);
+    state.sync = { status: ok ? 'ok' : 'failed', lastRun: r.searchedAt, found: r.jobs.length, newCount: fresh.length, report: r.report, message: ok ? '' : 'None of the job sites answered. Try again later.' };
+    toast(`${fresh.length} new job${fresh.length === 1 ? '' : 's'} found`);
   } catch (e) {
-    toast(e && e.code === 'server_not_connected' ? 'Search now needs the Claude Code connector. The scheduled search still runs.' : 'Could not start a search right now. The scheduled search still runs.');
+    if (e.status === 401) state.needKey = true;
+    else state.sync = { status: 'failed', lastRun: now, message: e.message };
   } finally {
-    // The status line updates on its own when the search writes its results.
-    setTimeout(() => { state.searching = false; renderAuto(); }, 5 * 60 * 1000);
+    Store.local('sync', state.sync);
+    state.searching = false;
+    renderAuto();
+    renderJobs();
   }
 }
 $('#searchNowBtn').addEventListener('click', searchNow);
@@ -852,8 +879,9 @@ async function writeWithClaude(app, btn) {
   const { system, user } = claudePrompt(state.profile, job, fit);
   btn.disabled = true; btn.textContent = 'Claude is writing…';
   try {
-    const r = await state.sample(`${system}\n\n${user}`, { modelTier: 'default' });
-    const out = parseClaudeReply(r.text);
+    const out = state.sample
+      ? parseClaudeReply((await state.sample(`${system}\n\n${user}`, { modelTier: 'default' })).text)
+      : await serverCall('api/letter', { profile: state.profile, job });
     await patchApp(app, { coverLetter: out.coverLetter, pitch: out.pitch || app.pitch, generator: 'claude' }, 'Claude rewrote the cover letter');
   } catch (err) {
     btn.disabled = false; btn.textContent = 'Rewrite with Claude';
@@ -870,7 +898,7 @@ function docBlock(title, app, field, editable, open) {
     h('div', { class: 'doc-tools' },
       h('button', { class: 'btn small', onclick: () => copy(box.innerText, `${title} copied`) }, 'Copy'),
       editable ? h('button', { class: 'btn small', onclick: () => patchApp(app, { [field]: box.innerText }, 'Saved') }, 'Save my edits') : null,
-      field === 'coverLetter' && state.sample ? h('button', { class: 'btn small', onclick: (e) => writeWithClaude(app, e.currentTarget) }, 'Rewrite with Claude') : null));
+      field === 'coverLetter' && (state.sample || (state.server && state.server.claude)) ? h('button', { class: 'btn small', onclick: (e) => writeWithClaude(app, e.currentTarget) }, 'Rewrite with Claude') : null));
 }
 
 function appCard(app, i) {
@@ -978,7 +1006,22 @@ $('#csvBtn').addEventListener('click', async () => {
   if (window.claude && claude.use) {
     claude.use('sample').then((s) => { state.sample = s; $('#fillBtn').hidden = !s; if (state.tab === 'apps') renderApps(); });
     claude.use('downloads').then((d) => { state.downloads = d; if (state.tab === 'apps') renderApps(); });
-    if (Store.mode === 'cloud') claude.use('mcp').then((m) => { state.mcp = m; if (state.tab === 'jobs') renderAuto(); });
+  } else {
+    // Not inside claude.ai: look for the web version's search function.
+    try {
+      const res = await fetch('api/search', { signal: AbortSignal.timeout(5000) });
+      const info = res.ok ? await res.json() : null;
+      if (info && info.ok) {
+        state.server = info;
+        state.sync = Store.local('sync');
+        const p = state.profile;
+        const filled = p.skills.length || p.languages.length || p.targetRoles.length;
+        const stale = !state.sync || Date.now() - Date.parse(state.sync.lastRun) > AUTO_HOURS * 3600000;
+        if (filled && stale) searchNow();
+        else if (state.tab === 'jobs') renderAuto();
+        if (state.tab === 'apps') renderApps();
+      }
+    } catch {}
   }
 })();
 </script>
