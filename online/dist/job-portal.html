@@ -143,6 +143,8 @@ details.card:not([open]) { gap: 0; }
 .status-bad { background: var(--bad-bg); color: var(--bad); padding: 8px 12px; border-radius: 8px; }
 .srcs { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); margin-top: 4px; }
 #ageFilter { width: auto; }
+.search-bar { display: flex; gap: 8px; }
+.search-bar input { flex: 1; font-size: 1rem; padding: 10px 12px; }
 .doc { white-space: pre-wrap; background: var(--sunk); border-radius: 8px; padding: 12px; font-size: 0.9rem; margin-top: 6px; min-height: 3em; }
 .doc[contenteditable]:focus { outline: 2px solid var(--accent); }
 .doc-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
@@ -289,8 +291,11 @@ dialog::backdrop { background: rgba(5, 15, 20, 0.55); }
           <h3>Automatic job search</h3>
           <p class="muted small" id="autoPlan"></p>
         </div>
-        <button class="btn primary" id="searchNowBtn" hidden>Search now</button>
       </div>
+      <form id="searchForm" class="search-bar" hidden>
+        <input id="searchQ" type="search" aria-label="Search for jobs" placeholder="Python developer">
+        <button class="btn primary" id="searchNowBtn" type="submit">Search</button>
+      </form>
       <div id="autoStatus" class="small"></div>
     </div>
 
@@ -752,22 +757,54 @@ function scoreRole(job, profile) {
   return { score: Math.round(35 + 55 * best), note: `Partly matches "${bestRole}"` };
 }
 
+// Remote jobs often say who may apply ("USA only", "UK"). For someone whose
+// locations are in India, a remote job is open to them only if it names
+// India, Asia/APAC or no region at all.
+const INDIA = /\b(india|pune|mumbai|bengaluru|bangalore|hyderabad|chennai|delhi|new delhi|noida|gurgaon|gurugram|kolkata|ahmedabad|kochi|jaipur|indore|nagpur|nashik|thane|chandigarh|coimbatore|maharashtra|karnataka)\b/;
+
 function checkLocation(job, profile) {
   const mode = profile.workMode || 'any';
   const prefs = (profile.locations || []).map((l) => l.toLowerCase()).filter(Boolean);
   const loc = String(job.location || '').toLowerCase();
   const locMatches = prefs.some((p) => loc.includes(p) || (loc && p.includes(loc)));
   const global = !loc || /\b(anywhere|worldwide|global|any location)\b/.test(loc);
+  const inIndia = INDIA.test(`${prefs.join(' ')} ${String(profile.location || '').toLowerCase()}`);
 
   if (job.remote) {
     if (mode === 'onsite') return { status: 'FLAG', note: 'Remote role; you prefer on-site' };
-    if (global || locMatches) return { status: 'PASS', note: 'Remote' + (loc ? ` (${job.location})` : '') };
+    if (global || locMatches || (inIndia && /\b(india|asia|apac)\b/.test(loc))) return { status: 'PASS', note: 'Remote' + (loc ? ` (${job.location})` : '') };
+    if (inIndia) return { status: 'FAIL', note: `Remote, but only for people in ${job.location}` };
     return { status: 'FLAG', note: `Remote, but limited to: ${job.location}` };
   }
   if (mode === 'remote') return { status: 'FAIL', note: `On-site/hybrid in ${job.location || 'unknown location'}; you want remote only` };
   if (locMatches) return { status: 'PASS', note: job.location };
   if (!prefs.length) return { status: 'FLAG', note: `Located in ${job.location || 'unknown'}` };
   return { status: 'FAIL', note: `${job.location || 'Unknown location'} is outside your preferred locations` };
+}
+
+// Words too common in job titles to say what a job is about.
+const GENERIC = new Set(['developer', 'developers', 'engineer', 'engineers', 'senior', 'junior', 'lead', 'software', 'full', 'stack', 'fullstack', 'backend', 'back', 'end', 'frontend', 'front', 'sr', 'jr', 'and', 'or', 'the', 'of', 'for', 'in', 'with', 'remote', 'job', 'jobs', 'role', 'web', 'app', 'application', 'programmer', 'specialist', 'associate', 'principal', 'staff', 'level', 'i', 'ii', 'iii']);
+const TECH_TITLE = /develop|engineer|programm|architect|\bsde\b|software|full[ -]?stack|back[ -]?end|front[ -]?end|devops|data scien|data engineer|machine learning|\bml\b|\bai\b|technical lead|tech lead/i;
+
+// Is this posting about what the person is looking for? True when the title
+// names one of their languages, target roles or search words, or when it is a
+// technical role whose posting asks for one of their languages (or skills,
+// when no languages are given). This drops postings that only mention a
+// language in passing, like an analyst role "nice to have: Python".
+function isRelevant(job, profile, queries = []) {
+  const langs = (profile.languages || []).map((l) => canonical(typeof l === 'string' ? l : l.name)).filter(Boolean);
+  const words = [...(profile.targetRoles || []), ...queries]
+    .flatMap((r) => String(r).toLowerCase().split(/[^a-z0-9+#.]+/))
+    .map((w) => w.replace(/^\.+|\.+$/g, ''))
+    .filter((w) => w.length > 1 && !GENERIC.has(w));
+  const core = [...new Set([...langs.map((l) => l.toLowerCase()), ...words])];
+  const title = String(job.title || '');
+  const inTitle = extractSkills(title, core).some((s) => core.includes(s.name.toLowerCase())) || core.some((w) => new RegExp(`(?<![a-z0-9])${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9])`, 'i').test(title));
+  if (inTitle) return true;
+  if (!TECH_TITLE.test(title)) return false;
+  const found = new Set(extractSkills(`${title}\n${(job.tags || []).join(', ')}\n${job.description}`, [...langs, ...(profile.skills || [])]).map((s) => s.name.toLowerCase()));
+  const wanted = langs.length ? langs : (profile.skills || []).map(canonical);
+  return wanted.some((w) => found.has(String(w).toLowerCase()));
 }
 
 function findDealBreaker(job, profile) {
@@ -806,7 +843,7 @@ function scoreJob(job, profile) {
   };
 }
 
-module.exports = { scoreJob, requiredYears, checkLocation, verdictFor, WEIGHTS };
+module.exports = { scoreJob, isRelevant, requiredYears, checkLocation, verdictFor, WEIGHTS };
 
 };
 __mods["generate"] = function (module, exports) {
@@ -1033,7 +1070,7 @@ module.exports = { searchPlan };
 
 };
 
-const { scoreJob } = require('./scoring');
+const { scoreJob, isRelevant } = require('./scoring');
 const { templateCoverLetter, templatePitch, cvSummary, claudePrompt, parseClaudeReply } = require('./generate');
 const { guardPosting, extractEmails } = require('./text');
 const { searchPlan } = require('./plan');
@@ -1252,6 +1289,7 @@ $('#saveProfile').addEventListener('click', async () => {
     await Store.saveProfile(state.profile);
     $('#ageFilter').value = String(state.profile.postedWithinDays);
     showTab('jobs');
+    $('#searchQ').value = '';
     if (state.server) searchNow();
     else toast('Profile saved. Job scores are updated.');
   } catch (e) { toast(`Could not save: ${e.message || e}`); }
@@ -1286,11 +1324,12 @@ function renderAuto() {
   const filled = p.skills.length || p.languages.length || p.targetRoles.length;
   const plan = searchPlan(p);
   $('#autoPlan').textContent = filled
-    ? `Looking for “${plan.queries.join('”, “')}” in ${plan.location}, posted in the last ${plan.maxAgeDays} day${plan.maxAgeDays === 1 ? '' : 's'}, ${p.yearsExperience ? `around ${p.yearsExperience} years of experience, ` : ''}on ${state.server ? state.server.sources.join(', ') : 'LinkedIn, Remotive, Remote OK, Arbeitnow and Jobicy'}. The portal searches when you save your profile and whenever you open it, at most every ${AUTO_HOURS} hours. New matches are added to your list below.`
+    ? `Looking for “${plan.queries.join('”, “')}” in ${plan.location}, posted in the last ${plan.maxAgeDays} day${plan.maxAgeDays === 1 ? '' : 's'}, ${p.yearsExperience ? `around ${p.yearsExperience} years of experience, ` : ''}on ${state.server ? state.server.sources.join(', ') : 'LinkedIn, Remotive, Remote OK, Arbeitnow and Jobicy'}. The portal searches when you save your profile and whenever you open it, at most every ${AUTO_HOURS} hours. Type other words in the box to search for something else.`
     : 'Fill in your profile and the portal will search the job boards for you.';
-  $('#searchNowBtn').hidden = !(state.server && filled);
+  $('#searchForm').hidden = !(state.server && filled);
+  $('#searchQ').placeholder = plan.queries.join(', ');
   $('#searchNowBtn').disabled = state.searching;
-  $('#searchNowBtn').textContent = state.searching ? 'Searching…' : 'Search now';
+  $('#searchNowBtn').textContent = state.searching ? 'Searching…' : 'Search';
   const s = state.sync;
   let status;
   if (!state.server) status = h('p', { class: 'muted' }, 'Automatic search runs on the web version of the portal, which can reach the job sites. Here you can still score and apply to jobs you add yourself.');
@@ -1300,13 +1339,13 @@ function renderAuto() {
       h('button', { class: 'btn small', onclick: () => { Store.local('key', key.value.trim()); state.needKey = false; searchNow(); } }, 'Save key and search'));
   }
   else if (state.searching) status = h('p', { class: 'muted' }, 'Searching the job boards. This takes up to a minute.');
-  else if (!s) status = h('p', { class: 'muted' }, 'No search has run yet. Press Search now.');
+  else if (!s) status = h('p', { class: 'muted' }, 'No search has run yet. Press Search.');
   else {
     const srcs = Object.entries(s.report || {}).map(([k, v]) => h('span', {}, `${SOURCE_NAMES[k] || k}: ${v.ok ? v.count : 'failed'}`));
     const when = relTime(s.lastRun) === 'today' ? `today at ${new Date(s.lastRun).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : relTime(s.lastRun);
     status = h('div', {},
       s.status === 'ok'
-        ? h('p', { class: 'status-ok' }, `Last search ${when}: ${s.found ?? 0} matching jobs found, ${s.newCount ?? 0} new.`)
+        ? h('p', { class: 'status-ok' }, `Last search ${when}${s.plan ? ` for “${s.plan.queries.join('”, “')}”` : ''}: ${s.found ?? 0} matching jobs found, ${s.newCount ?? 0} new.`)
         : h('p', { class: 'status-bad' }, `The last search (${when}) did not finish. ${s.message || ''}`),
       srcs.length ? h('div', { class: 'srcs small' }, ...srcs) : null);
   }
@@ -1330,14 +1369,22 @@ async function searchNow() {
   renderAuto();
   const now = new Date().toISOString();
   try {
-    const r = await serverCall('api/search', { profile: state.profile });
+    const r = await serverCall('api/search', { profile: state.profile, query: $('#searchQ').value.trim() });
+    // Each search replaces the jobs found by the previous one, so the list
+    // always matches what was searched for. Jobs you added yourself or
+    // already applied to stay.
     const known = new Set(state.jobs.map((j) => j.id));
-    const fresh = r.jobs.filter((j) => !known.has(j.id)).map(({ fit, ...j }) => ({ ...j, auto: true, addedAt: now }));
-    state.jobs = [...fresh, ...state.jobs].slice(0, 400);
+    const applied = new Set(state.apps.map((a) => a.jobId));
+    const hidden = new Set(state.jobs.filter((j) => j.hidden).map((j) => j.id));
+    const found = r.jobs.map(({ fit, ...j }) => ({ ...j, auto: true, addedAt: now, hidden: hidden.has(j.id) || undefined }));
+    const foundIds = new Set(found.map((j) => j.id));
+    const kept = state.jobs.filter((j) => !foundIds.has(j.id) && (!j.auto || applied.has(j.id)));
+    const newCount = found.filter((j) => !known.has(j.id)).length;
+    state.jobs = [...found, ...kept].slice(0, 400);
     Store.local('jobs', state.jobs);
     const ok = Object.values(r.report).some((v) => v.ok);
-    state.sync = { status: ok ? 'ok' : 'failed', lastRun: r.searchedAt, found: r.jobs.length, newCount: fresh.length, report: r.report, message: ok ? '' : 'None of the job sites answered. Try again later.' };
-    toast(`${fresh.length} new job${fresh.length === 1 ? '' : 's'} found`);
+    state.sync = { status: ok ? 'ok' : 'failed', lastRun: r.searchedAt, found: r.jobs.length, newCount, report: r.report, plan: r.plan, message: ok ? '' : 'None of the job sites answered. Try again later.' };
+    toast(`${r.jobs.length} matching job${r.jobs.length === 1 ? '' : 's'} found`);
   } catch (e) {
     if (e.status === 401) state.needKey = true;
     else state.sync = { status: 'failed', lastRun: now, message: e.message };
@@ -1348,7 +1395,7 @@ async function searchNow() {
     renderJobs();
   }
 }
-$('#searchNowBtn').addEventListener('click', searchNow);
+$('#searchForm').addEventListener('submit', (e) => { e.preventDefault(); searchNow(); });
 
 // ---------- adding jobs ----------
 $('#addForm').addEventListener('submit', async (e) => {
@@ -1384,7 +1431,10 @@ $('#fillBtn').addEventListener('click', async (e) => {
 // ---------- job list ----------
 function scored() {
   const byJob = new Map(state.apps.map((a) => [a.jobId, a]));
-  const real = state.jobs.filter((j) => !j.hidden);
+  // Found jobs that no longer fit the profile (say, Node.js jobs after
+  // switching to Python) drop out; jobs you added or applied to stay.
+  const queries = state.sync && state.sync.plan ? state.sync.plan.queries : searchPlan(state.profile).queries;
+  const real = state.jobs.filter((j) => !j.hidden && (!j.auto || byJob.has(j.id) || isRelevant(j, state.profile, queries)));
   const jobs = real.length || state.jobs.length ? real : EXAMPLES;
   return jobs.map((j) => ({ ...j, fit: scoreJob(j, state.profile), application: byJob.get(j.id) || null }))
     .sort((a, b) => b.fit.eligible - a.fit.eligible || b.fit.score - a.fit.score);

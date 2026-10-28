@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 
 const { extractSkills, canonical } = require('../lib/skills');
 const { htmlToText, guardPosting, extractEmails } = require('../lib/text');
-const { scoreJob, requiredYears, checkLocation } = require('../lib/scoring');
+const { scoreJob, isRelevant, requiredYears, checkLocation } = require('../lib/scoring');
 const { normalize, matchesQuery, dedupeKey } = require('../lib/sources');
 const { templateCoverLetter, tailoredSkills } = require('../lib/generate');
 const { cleanProfile, csvCell } = require('../server');
@@ -61,7 +61,12 @@ test('requiredYears reads text first, then title', () => {
 test('location check', () => {
   const p = { workMode: 'remote', locations: ['India'] };
   assert.equal(checkLocation({ remote: true, location: 'Worldwide' }, p).status, 'PASS');
-  assert.equal(checkLocation({ remote: true, location: 'USA only' }, p).status, 'FLAG');
+  // Remote jobs limited to another country don't count for someone in India...
+  assert.equal(checkLocation({ remote: true, location: 'USA only' }, p).status, 'FAIL');
+  assert.equal(checkLocation({ remote: true, location: 'Remote – India' }, p).status, 'PASS');
+  assert.equal(checkLocation({ remote: true, location: 'APAC' }, { workMode: 'any', locations: ['Pune'] }).status, 'PASS');
+  // ...but stay flagged when the person's country isn't known.
+  assert.equal(checkLocation({ remote: true, location: 'USA only' }, { workMode: 'any', locations: ['Berlin'] }).status, 'FLAG');
   assert.equal(checkLocation({ remote: false, location: 'Pune, India' }, p).status, 'FAIL');
   assert.equal(checkLocation({ remote: false, location: 'Pune, India' }, { workMode: 'any', locations: ['pune'] }).status, 'PASS');
 });
@@ -134,4 +139,19 @@ test('csvCell neutralises formulas and quotes', () => {
   assert.equal(csvCell('=HYPERLINK("x")'), `"'=HYPERLINK(""x"")"`);
   assert.equal(csvCell('a,b'), '"a,b"');
   assert.equal(csvCell('plain'), 'plain');
+});
+
+test('isRelevant keeps jobs about the profile and drops passing mentions', () => {
+  const p = { languages: [{ name: 'Python' }], skills: ['Django', 'SQL'], targetRoles: [], locations: ['Pune'] };
+  const keep = (title, description = '') => isRelevant({ title, description }, p, ['Python developer']);
+  assert.equal(keep('Python Full Stack Developer'), true);
+  assert.equal(keep('Senior Associate Technology L2_Python'), true);
+  assert.equal(keep('Developer L3', 'Python and Django'), true);
+  assert.equal(keep('Developer III', 'Java only'), false);
+  assert.equal(keep('Lead Growth Analyst', 'We use Python and SQL'), false);
+  assert.equal(keep('Senior Manager, Accounting', 'SQL, Python'), false);
+  // A typed search word counts even when it isn't in the profile.
+  assert.equal(isRelevant({ title: 'Golang Engineer', description: '' }, p, ['golang']), true);
+  // Old jobs from a previous profile drop out.
+  assert.equal(isRelevant({ title: 'Node.js Developer', description: 'Node.js, Express' }, p, ['Python developer']), false);
 });

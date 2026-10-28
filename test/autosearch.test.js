@@ -60,8 +60,8 @@ test('drops postings older than the recency window', async () => {
   const prev = process.env.JOB_SOURCES;
   process.env.JOB_SOURCES = 'demo';
   try {
-    const all = await searchForProfile({ targetRoles: [], skills: ['x'], postedWithinDays: 30 }, { query: 'engineer' });
-    const recent = await searchForProfile({ targetRoles: [], skills: ['x'], postedWithinDays: 3 }, { query: 'engineer' });
+    const all = await searchForProfile({ targetRoles: [], skills: ['Docker'], postedWithinDays: 30 }, { query: 'engineer' });
+    const recent = await searchForProfile({ targetRoles: [], skills: ['Docker'], postedWithinDays: 3 }, { query: 'engineer' });
     assert.ok(recent.jobs.length > 0 && recent.jobs.length < all.jobs.length, `${recent.jobs.length} vs ${all.jobs.length}`);
     assert.ok(recent.jobs.every((j) => Date.now() - Date.parse(j.postedAt) <= 3 * 86400000));
     assert.equal(recent.report.demo.ok, true);
