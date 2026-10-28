@@ -11,11 +11,7 @@ The workflow is based on [ai-job-search](https://github.com/ai-job-search-dev/ai
 
 ## Quick start
 
-You need Node.js 18 or newer. There is nothing to install with npm: the portal has no dependencies.
-
-```bash
-cd job-portal
-```
+You need Node.js 18 or newer. There is nothing to install with npm: the portal has no dependencies. From the repo folder:
 
 ```bash
 npm start
@@ -85,8 +81,7 @@ Verdicts: **Strong Fit** 75+, **Good Fit** 60–74, **Moderate** 45–59, **Weak
 ## Safety
 
 - **Postings are treated as untrusted.** Each one is converted to plain text, and hidden HTML and invisible Unicode characters are removed. Lines that look like instructions to an AI ("ignore previous instructions…") are flagged with a ⚠ on the job card. Posting text is never rendered as HTML.
-- **Your data stays local.** Your profile, jobs and applications are stored in `job-portal/data/`, which is git-ignored. The server listens on `127.0.0.1` only and refuses cross-origin and non-localhost requests.
-- `job-portal/.htaccess` blocks Apache from serving this folder, in case the repo is deployed to a PHP host.
+- **Your data stays local.** Your profile, jobs and applications are stored in `data/`, which is git-ignored. The server listens on `127.0.0.1` only and refuses cross-origin and non-localhost requests.
 
 ## Configuration
 
@@ -125,8 +120,8 @@ The portal deploys to Vercel as a static page plus two serverless functions:
 
 Your profile, jobs and applications stay in your browser.
 
-1. Go to https://vercel.com/new and import the GitHub repo `cerebrumtech/SyncLMS`.
-2. Under **Root Directory**, choose `job-portal`. Leave the framework preset as **Other**. `vercel.json` already sets the build command and output folder.
+1. Go to https://vercel.com/new and import this GitHub repo.
+2. Leave the root directory as is and the framework preset as **Other**. `vercel.json` already sets the build command and output folder.
 3. Optional, under **Environment Variables**:
    - `PORTAL_KEY`: any password. The deployed site will ask for it before searching, so strangers can't use your deployment to run searches.
    - `ANTHROPIC_API_KEY`: turns on "Rewrite with Claude" for cover letters.
@@ -135,7 +130,7 @@ Your profile, jobs and applications stay in your browser.
 
 Open the site and fill in your profile: programming languages, skills, job titles, city, years of experience and "posted within" days. When you save, the portal searches LinkedIn, Remotive, Remote OK, Arbeitnow and Jobicy and fills your job list. It searches again whenever you open it, at most every 6 hours, and **Search now** runs one straight away.
 
-To try the Vercel version on your own computer, run these from `job-portal/`:
+To try the Vercel version on your own computer, run these from the repo folder:
 
 ```bash
 node online/build.js
