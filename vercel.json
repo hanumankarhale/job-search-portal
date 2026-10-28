@@ -1,9 +1,14 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
   "buildCommand": "node online/build.js",
   "outputDirectory": "web",
   "functions": {
-    "api/search.js": { "maxDuration": 60 },
-    "api/letter.js": { "maxDuration": 60 }
+    "api/search.js": {
+      "maxDuration": 60
+    },
+    "api/letter.js": {
+      "maxDuration": 60
+    }
   }
 }
