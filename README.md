@@ -114,13 +114,9 @@ To add a job board, add an entry to `SOURCES` in `lib/sources.js` that returns r
 
 ## Put it online with Vercel
 
-### Automatic deploys from GitHub
+### Deploys
 
-`.github/workflows/deploy.yml` runs the tests and deploys to Vercel on every push to `main`. It needs one secret, set once:
-
-1. Create a token at https://vercel.com/account/tokens.
-2. In this repo on GitHub, go to **Settings > Secrets and variables > Actions > New repository secret**. Name it `VERCEL_TOKEN` and paste the token.
-3. Push to `main`, or open the **Actions** tab and run **Deploy to Vercel**. The run's summary shows the live address.
+The site is connected to Vercel through Vercel's GitHub integration, so every push to `main` deploys automatically. To confirm the live site and every job source work, run **Check live site** from the repo's Actions tab: it runs a real search against the deployed site.
 
 ### Importing by hand
 
