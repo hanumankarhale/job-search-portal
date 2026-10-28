@@ -114,6 +114,16 @@ To add a job board, add an entry to `SOURCES` in `lib/sources.js` that returns r
 
 ## Put it online with Vercel
 
+### Automatic deploys from GitHub
+
+`.github/workflows/deploy.yml` runs the tests and deploys to Vercel on every push to `main`. It needs one secret, set once:
+
+1. Create a token at https://vercel.com/account/tokens.
+2. In this repo on GitHub, go to **Settings > Secrets and variables > Actions > New repository secret**. Name it `VERCEL_TOKEN` and paste the token.
+3. Push to `main`, or open the **Actions** tab and run **Deploy to Vercel**. The run's summary shows the live address.
+
+### Importing by hand
+
 The portal deploys to Vercel as a static page plus two serverless functions:
 - `api/search` searches the job boards for your profile.
 - `api/letter` has Claude write cover letters, if you add an Anthropic API key.
