@@ -1,0 +1,14 @@
+{
+  "name": "job-portal",
+  "version": "1.0.0",
+  "description": "Personal job search portal: enter your skills, find matching jobs, score fit, and prepare tailored applications.",
+  "private": true,
+  "type": "commonjs",
+  "main": "server.js",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.js",
+    "demo": "JOB_SOURCES=demo node server.js",
+    "test": "node --test"
+  }
+}

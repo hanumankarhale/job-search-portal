@@ -1,0 +1,1 @@
+`linkedin-search-cards.json` holds two verbatim job cards from a LinkedIn guest search response. It is copied from the MIT-licensed [ai-job-search](https://github.com/ai-job-search-dev/ai-job-search) repo (`.agents/skills/linkedin-search/cli/tests/fixtures/search-cards.json`), where its provenance is documented.
