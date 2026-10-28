@@ -12,6 +12,9 @@ on:
       key:
         description: PORTAL_KEY, if the site has one
         default: ''
+      profile:
+        description: Profile to search with (JSON)
+        default: '{"languages":[{"name":"Node.js"}],"skills":["JavaScript","Express","MongoDB"],"targetRoles":["Node.js Developer"],"locations":["Pune"],"yearsExperience":4,"postedWithinDays":10}'
 
 jobs:
   check:
@@ -27,11 +30,13 @@ jobs:
           code=$(curl -sS -o info.json -w "%{http_code}" "${{ inputs.url }}/api/search")
           echo "::notice title=api/search::HTTP $code $(head -c 300 info.json)"
           [ "$code" = 200 ]
-      - name: Real search (Node.js, 4 years, Pune, last 10 days)
+      - name: Real search with the profile
+        env:
+          PROFILE: ${{ inputs.profile }}
         run: |
           curl -sS --max-time 120 -X POST "${{ inputs.url }}/api/search" \
             -H 'Content-Type: application/json' -H "X-Portal-Key: ${{ inputs.key }}" \
-            -d '{"profile":{"languages":[{"name":"Node.js"}],"skills":["JavaScript","Express","MongoDB"],"targetRoles":["Node.js Developer"],"locations":["Pune"],"yearsExperience":4,"postedWithinDays":10}}' \
+            -d "{\"profile\":$PROFILE}" \
             -o result.json -w "search HTTP %{http_code}\n"
           node -e '
             const r = JSON.parse(require("fs").readFileSync("result.json", "utf8"));
@@ -39,6 +44,6 @@ jobs:
             const note = (title, msg) => console.log(`::notice title=${title}::${msg.replace(/\n/g, "%0A")}`);
             note("Search", `Searched ${r.plan.queries.join(", ")} in ${r.plan.location} within ${r.plan.maxAgeDays} days: ${r.jobs.length} jobs`);
             note("Sources", Object.entries(r.report).map(([k, v]) => `${k}: ${v.ok ? v.count + " jobs" : "FAILED " + v.error}`).join("\n"));
-            note("Best matches", r.jobs.slice(0, 10).map((j) => `${j.fit.score} ${j.title} | ${j.company} | ${j.location} | ${j.postedAt ? j.postedAt.slice(0, 10) : "no date"}`).join("\n"));
+            note("Best matches", r.jobs.slice(0, 25).map((j) => `${j.fit.score} ${j.title} | ${j.company} | ${j.location} | ${j.postedAt ? j.postedAt.slice(0, 10) : "no date"}`).join("\n"));
             if (!Object.values(r.report).some((v) => v.ok)) process.exit(1);
           '
