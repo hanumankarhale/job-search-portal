@@ -2,3 +2,7 @@ data/
 test/
 public/
 online/dist/
+# The local version's server and tools: Vercel serves web/ and api/ instead.
+server.js
+web-dev.js
+fetch-jobs.js

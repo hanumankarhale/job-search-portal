@@ -20,7 +20,7 @@ jobs:
       - name: Page loads
         run: |
           code=$(curl -sS -o page.html -w "%{http_code}" "${{ inputs.url }}/")
-          echo "::notice title=Page::HTTP $code, $(wc -c < page.html) bytes, title: $(grep -o '<title>[^<]*' page.html | head -1 | cut -c8-)"
+          echo "::notice title=Page::HTTP $code, $(wc -c < page.html) bytes: $(head -c 200 page.html | tr -d "\n")"
           [ "$code" = 200 ]
       - name: Search function answers
         run: |
