@@ -18,9 +18,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Page loads
-        run: curl -fsS -o /dev/null -w "page HTTP %{http_code}\n" "${{ inputs.url }}/"
+        run: |
+          code=$(curl -sS -o page.html -w "%{http_code}" "${{ inputs.url }}/")
+          echo "::notice title=Page::HTTP $code, $(wc -c < page.html) bytes, title: $(grep -o '<title>[^<]*' page.html | head -1 | cut -c8-)"
+          [ "$code" = 200 ]
       - name: Search function answers
-        run: curl -fsS "${{ inputs.url }}/api/search"; echo
+        run: |
+          code=$(curl -sS -o info.json -w "%{http_code}" "${{ inputs.url }}/api/search")
+          echo "::notice title=api/search::HTTP $code $(head -c 300 info.json)"
+          [ "$code" = 200 ]
       - name: Real search (Node.js, 4 years, Pune, last 10 days)
         run: |
           curl -sS --max-time 120 -X POST "${{ inputs.url }}/api/search" \
@@ -29,10 +35,10 @@ jobs:
             -o result.json -w "search HTTP %{http_code}\n"
           node -e '
             const r = JSON.parse(require("fs").readFileSync("result.json", "utf8"));
-            if (!r.jobs) { console.log(r); process.exit(1); }
-            console.log("Searched:", r.plan.queries.join(", "), "in", r.plan.location, "within", r.plan.maxAgeDays, "days");
-            for (const [k, v] of Object.entries(r.report)) console.log(` ${k}: ${v.ok ? v.count + " jobs" : "FAILED " + v.error}`);
-            console.log(`${r.jobs.length} jobs. Best matches:`);
-            for (const j of r.jobs.slice(0, 8)) console.log(` ${j.fit.score}  ${j.title} | ${j.company} | ${j.location} | ${j.postedAt ? j.postedAt.slice(0, 10) : "no date"}`);
+            if (!r.jobs) { console.log(`::error title=Search::${JSON.stringify(r).slice(0, 300)}`); process.exit(1); }
+            const note = (title, msg) => console.log(`::notice title=${title}::${msg.replace(/\n/g, "%0A")}`);
+            note("Search", `Searched ${r.plan.queries.join(", ")} in ${r.plan.location} within ${r.plan.maxAgeDays} days: ${r.jobs.length} jobs`);
+            note("Sources", Object.entries(r.report).map(([k, v]) => `${k}: ${v.ok ? v.count + " jobs" : "FAILED " + v.error}`).join("\n"));
+            note("Best matches", r.jobs.slice(0, 10).map((j) => `${j.fit.score} ${j.title} | ${j.company} | ${j.location} | ${j.postedAt ? j.postedAt.slice(0, 10) : "no date"}`).join("\n"));
             if (!Object.values(r.report).some((v) => v.ok)) process.exit(1);
           '
