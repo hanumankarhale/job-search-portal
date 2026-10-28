@@ -148,9 +148,10 @@ async function saveProfile() {
   try {
     state.profile = await api('/api/profile', { method: 'PUT', body: readProfile() });
     fillProfile(state.profile);
-    toast('Profile saved — job scores updated');
-    await loadJobs();
-    if (!state.jobs.length) showTab('jobs');
+    $('#ageFilter').value = String(state.profile.postedWithinDays);
+    toast('Profile saved. Searching for matching jobs…');
+    showTab('jobs');
+    runSearch({});
   } catch (e) {
     toast(e.message);
   } finally {
@@ -224,7 +225,9 @@ function jobCard(job) {
 
 function filteredJobs() {
   const min = Number($('#minFilter').value);
-  return state.jobs.filter((j) => (!$('#onlyEligible').checked || j.fit.eligible) && j.fit.score >= min && (!$('#hideApplied').checked || !j.application));
+  const days = Number($('#ageFilter').value);
+  const cutoff = days ? Date.now() - days * 86400000 : 0;
+  return state.jobs.filter((j) => (!$('#onlyEligible').checked || j.fit.eligible) && j.fit.score >= min && (!$('#hideApplied').checked || !j.application) && (!cutoff || !j.postedAt || Date.parse(j.postedAt) >= cutoff));
 }
 
 function renderJobs() {
@@ -242,7 +245,7 @@ function renderJobs() {
   );
 }
 
-['#onlyEligible', '#hideApplied'].forEach((s) => $(s).addEventListener('change', renderJobs));
+['#onlyEligible', '#hideApplied', '#ageFilter'].forEach((s) => $(s).addEventListener('change', renderJobs));
 $('#minFilter').addEventListener('input', (e) => { $('#minFilterVal').textContent = e.target.value; renderJobs(); });
 
 function renderSources() {
@@ -262,26 +265,37 @@ async function loadJobs() {
   renderJobs();
 }
 
-$('#searchForm').addEventListener('submit', async (e) => {
+$('#searchForm').addEventListener('submit', (e) => {
   e.preventDefault();
-  const btn = $('#searchBtn');
   const sources = [...document.querySelectorAll('[data-source]:checked')].map((c) => c.value);
+  runSearch({ query: $('#query').value, location: $('#searchLocation').value, sources });
+});
+
+function describeSearch(r) {
+  const parts = Object.entries(r.report).map(([k, v]) => (v.ok ? `${sourceName(k)}: ${v.count}` : `${sourceName(k)}: failed (${v.error})`));
+  const plan = r.plan ? ` in ${r.plan.location}, posted within ${r.plan.maxAgeDays} days` : '';
+  return `Searched “${r.plan ? r.plan.queries.join(', ') : r.query}”${plan} ${relTime(r.lastSearchAt)} · ${parts.join(' · ')} · ${r.newCount} new`;
+}
+
+async function runSearch(body) {
+  const btn = $('#searchBtn');
+  if (btn.disabled) return;
   btn.disabled = true;
   btn.textContent = 'Searching…';
   $('#searchReport').textContent = 'Searching job boards…';
   try {
-    const r = await api('/api/search', { method: 'POST', body: { query: $('#query').value, location: $('#searchLocation').value, sources } });
-    const parts = Object.entries(r.report).map(([k, v]) => (v.ok ? `${sourceName(k)}: ${v.count}` : `${sourceName(k)}: failed (${v.error})`));
-    $('#searchReport').textContent = `Searched “${r.query}” — ${parts.join(' · ')} — ${r.newCount} new`;
+    const r = await api('/api/search', { method: 'POST', body });
+    $('#searchReport').textContent = describeSearch(r);
     await loadJobs();
     await refreshStatus();
+    toast(`${r.newCount} new job${r.newCount === 1 ? '' : 's'} found`);
   } catch (err) {
     $('#searchReport').textContent = err.message;
   } finally {
     btn.disabled = false;
     btn.textContent = 'Search jobs';
   }
-});
+}
 
 function openJob(job) {
   const f = job.fit;
@@ -497,7 +511,13 @@ async function refreshStatus() {
     await refreshStatus();
     state.profile = await api('/api/profile');
     fillProfile(state.profile);
+    $('#ageFilter').value = String(state.profile.postedWithinDays || 0);
     await Promise.all([loadJobs(), loadApps()]);
+    const last = state.status.lastSearch;
+    if (last) $('#searchReport').textContent = describeSearch(last);
+    const filled = state.profile.skills.length || state.profile.languages.length || state.profile.targetRoles.length;
+    const stale = !last || Date.now() - Date.parse(last.lastSearchAt) > (state.status.autoRefreshHours || 6) * 3600000;
+    if (filled && stale) runSearch({});
     let tab = state.profile.name && state.profile.skills.length ? 'jobs' : 'profile';
     try { tab = localStorage.getItem('jp.tab') || tab; } catch {}
     if (!state.profile.name) tab = 'profile';

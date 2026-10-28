@@ -137,6 +137,12 @@ textarea { resize: vertical; }
 .app select { width: auto; font-weight: 600; }
 .ask { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--warn-bg); color: var(--warn); padding: 8px 12px; border-radius: 8px; font-size: 0.88rem; }
 details > summary { cursor: pointer; font-weight: 600; color: var(--accent); padding: 2px 0; }
+details.card > summary { font-family: var(--font-display); font-size: 1.05rem; color: var(--ink); }
+details.card:not([open]) { gap: 0; }
+.status-ok { color: var(--good); }
+.status-bad { background: var(--bad-bg); color: var(--bad); padding: 8px 12px; border-radius: 8px; }
+.srcs { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); margin-top: 4px; }
+#ageFilter { width: auto; }
 .doc { white-space: pre-wrap; background: var(--sunk); border-radius: 8px; padding: 12px; font-size: 0.9rem; margin-top: 6px; min-height: 3em; }
 .doc[contenteditable]:focus { outline: 2px solid var(--accent); }
 .doc-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
@@ -248,7 +254,21 @@ dialog::backdrop { background: rgba(5, 15, 20, 0.55); }
           </label>
           <label class="field">Auto-apply from score<input id="p-min" name="minScore" type="number" min="0" max="100"></label>
         </div>
+        <div class="row">
+          <label class="field">Jobs posted within
+            <select id="p-days" name="postedWithinDays">
+              <option value="1">Last 24 hours</option>
+              <option value="3">Last 3 days</option>
+              <option value="7">Last 7 days</option>
+              <option value="10" selected>Last 10 days</option>
+              <option value="14">Last 14 days</option>
+              <option value="30">Last 30 days</option>
+            </select>
+          </label>
+          <label class="field">Search keywords <span class="hint">optional</span><input id="p-keywords" name="searchKeywords" placeholder="Uses your job titles"></label>
+        </div>
         <label class="field">Skip jobs mentioning <span class="hint">comma separated</span><input id="p-exclude" name="excludeKeywords" placeholder="unpaid, commission only"></label>
+        <p class="hint">Saving your profile starts a job search, and it repeats twice a day. New matches appear on the Jobs tab.</p>
       </div>
 
       <div class="card">
@@ -264,17 +284,28 @@ dialog::backdrop { background: rgba(5, 15, 20, 0.55); }
   <!-- JOBS -->
   <section class="panel" id="tab-jobs" hidden>
     <div class="card">
-      <h3>Search the job boards</h3>
-      <p class="muted small">Each link opens a search for your profile on that site. When you find a job you like, copy its description into <b>Add a job</b> below to score it and prepare the application.</p>
+      <div class="panel-head">
+        <div>
+          <h3>Automatic job search</h3>
+          <p class="muted small" id="autoPlan"></p>
+        </div>
+        <button class="btn primary" id="searchNowBtn" hidden>Search now</button>
+      </div>
+      <div id="autoStatus" class="small"></div>
+    </div>
+
+    <details class="card">
+      <summary>Search the job boards yourself</summary>
+      <p class="muted small">Each link opens a search for your profile on that site. When you find a job you like, copy its description into <b>Add a job</b> to score it and prepare the application.</p>
       <div class="row">
         <label class="field">Keywords<input id="q" placeholder="PHP Developer"></label>
         <label class="field">Location<input id="loc" placeholder="Pune"></label>
       </div>
       <div class="boards" id="boards"></div>
-    </div>
+    </details>
 
-    <div class="card">
-      <h3>Add a job</h3>
+    <details class="card">
+      <summary>Add a job</summary>
       <form id="addForm" class="panel" style="gap:12px">
         <label class="field">Job description <span class="hint">paste the whole posting</span><textarea id="a-desc" rows="6" required></textarea></label>
         <div class="row">
@@ -292,11 +323,22 @@ dialog::backdrop { background: rgba(5, 15, 20, 0.55); }
           <button class="btn primary" type="submit">Add and score</button>
         </div>
       </form>
-    </div>
+    </details>
 
     <div class="toolbar">
       <div class="filters">
         <label class="check"><input type="checkbox" id="onlyEligible" checked> Hide location mismatches</label>
+        <label class="check">Posted
+          <select id="ageFilter" aria-label="Posted within">
+            <option value="0">any time</option>
+            <option value="1">last 24 hours</option>
+            <option value="3">last 3 days</option>
+            <option value="7">last 7 days</option>
+            <option value="10">last 10 days</option>
+            <option value="14">last 14 days</option>
+            <option value="30">last 30 days</option>
+          </select>
+        </label>
         <label class="check">Min score <input type="range" id="minFilter" min="0" max="100" value="0"> <span id="minFilterVal" class="label">0</span></label>
       </div>
       <button class="btn primary" id="autoApplyBtn">Apply to all top matches</button>
@@ -329,6 +371,12 @@ const process = { env: {} };
 const { scoreJob } = require('./scoring');
 const { templateCoverLetter, templatePitch, cvSummary, claudePrompt, parseClaudeReply } = require('./generate');
 const { guardPosting, extractEmails } = require('./text');
+const { searchPlan } = require('./plan');
+
+// Scheduled task that searches the job boards and adds results to this page's store.
+const TRIGGER_ID = 'trig_01K24V7bwMjByPsKyNdd5E7Q';
+const SCHEDULE_TEXT = 'twice a day, at 9:47 and 17:47 India time';
+const SOURCE_NAMES = { linkedin: 'LinkedIn', remotive: 'Remotive', remoteok: 'Remote OK', arbeitnow: 'Arbeitnow', jobicy: 'Jobicy', adzuna: 'Adzuna', manual: 'Added by you' };
 
 // ---------- helpers ----------
 const $ = (s) => document.querySelector(s);
@@ -371,7 +419,7 @@ const slug = (s) => String(s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, 
 
 // ---------- storage ----------
 // Signed in on claude.ai: a private per-person store. Otherwise: this browser.
-const DEFAULT_PROFILE = { name: '', email: '', phone: '', location: '', headline: '', yearsExperience: 0, summary: '', languages: [], skills: [], targetRoles: [], locations: [], workMode: 'any', excludeKeywords: [], highlights: [], experience: '', education: '', linkedin: '', github: '', minScore: 60 };
+const DEFAULT_PROFILE = { name: '', email: '', phone: '', location: '', headline: '', yearsExperience: 0, summary: '', languages: [], skills: [], targetRoles: [], locations: [], workMode: 'any', postedWithinDays: 10, searchKeywords: '', excludeKeywords: [], highlights: [], experience: '', education: '', linkedin: '', github: '', minScore: 60 };
 
 const Store = {
   mode: 'browser',
@@ -381,7 +429,7 @@ const Store = {
     if (!window.claude || !claude.use) return;
     const [db, user] = await Promise.all([claude.use('db'), claude.use('user')]);
     const id = user ? await user.id() : null;
-    if (db && id) { this.db = db; this.base = `data/users/${id}/portal`; this.mode = 'cloud'; }
+    if (db && id) { this.db = db; this.root = `data/users/${id}`; this.base = `${this.root}/portal`; this.mode = 'cloud'; }
   },
   local(key, val) {
     try {
@@ -416,13 +464,19 @@ const Store = {
     if (this.mode === 'cloud') return this.db.collection(`${this.base}/${kind}`).doc(item.id).set(item);
     this.local(kind, state[kind]);
   },
+  // Live updates: the scheduled search writes jobs and a status document here.
+  watch(onJobs, onSync) {
+    if (this.mode !== 'cloud') return;
+    this.db.collection(`${this.base}/jobs`).onSnapshot((snap) => onJobs(snap.docs.map((d) => d.data())), () => {});
+    this.db.doc(`${this.root}/sync`).onSnapshot((snap) => onSync(snap.exists ? snap.data() : null), () => {});
+  },
   async remove(kind, id) {
     if (this.mode === 'cloud') return this.db.collection(`${this.base}/${kind}`).doc(id).delete();
     this.local(kind, state[kind]);
   },
 };
 
-const state = { profile: { ...DEFAULT_PROFILE }, jobs: [], apps: [], tab: 'profile', sample: null, downloads: null };
+const state = { profile: { ...DEFAULT_PROFILE }, jobs: [], apps: [], tab: 'profile', sample: null, downloads: null, mcp: null, sync: null, searching: false };
 
 async function persist(kind, item, op = 'put') {
   try { await (op === 'put' ? Store.put(kind, item) : Store.remove(kind, item.id)); }
@@ -456,6 +510,7 @@ function makeJob(raw) {
     emails: extractEmails(g.text),
     postedAt: raw.postedAt || new Date().toISOString(),
     example: !!raw.example,
+    source: raw.source || '',
   };
 }
 
@@ -465,7 +520,7 @@ function showTab(name) {
   document.querySelectorAll('.tab').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
   document.querySelectorAll('.panel[id^="tab-"]').forEach((p) => (p.hidden = p.id !== `tab-${name}`));
   try { localStorage.setItem('jp.tab', name); } catch {}
-  if (name === 'jobs') { renderBoards(); renderJobs(); }
+  if (name === 'jobs') { renderAuto(); renderBoards(); renderJobs(); }
   if (name === 'apps') renderApps();
 }
 document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
@@ -473,7 +528,7 @@ document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () 
 // ---------- profile ----------
 let langs = [];
 let skills = [];
-const FIELDS = { name: 'p-name', headline: 'p-headline', email: 'p-email', phone: 'p-phone', location: 'p-location', yearsExperience: 'p-years', summary: 'p-summary', linkedin: 'p-linkedin', github: 'p-github', targetRoles: 'p-roles', locations: 'p-locations', workMode: 'p-mode', minScore: 'p-min', excludeKeywords: 'p-exclude', highlights: 'p-highlights', experience: 'p-experience', education: 'p-education' };
+const FIELDS = { name: 'p-name', headline: 'p-headline', email: 'p-email', phone: 'p-phone', location: 'p-location', yearsExperience: 'p-years', summary: 'p-summary', linkedin: 'p-linkedin', github: 'p-github', targetRoles: 'p-roles', locations: 'p-locations', workMode: 'p-mode', minScore: 'p-min', postedWithinDays: 'p-days', searchKeywords: 'p-keywords', excludeKeywords: 'p-exclude', highlights: 'p-highlights', experience: 'p-experience', education: 'p-education' };
 const LIST_FIELDS = ['targetRoles', 'locations', 'excludeKeywords'];
 
 function renderTags() {
@@ -518,6 +573,7 @@ function readProfile() {
   p.highlights = p.highlights.split('\n').map((s) => s.trim()).filter(Boolean);
   p.yearsExperience = Math.max(0, Math.min(50, Number(p.yearsExperience) || 0));
   p.minScore = Math.max(0, Math.min(100, Number(p.minScore) || 60));
+  p.postedWithinDays = Number(p.postedWithinDays) || 10;
   p.languages = langs;
   p.skills = skills;
   return p;
@@ -529,8 +585,10 @@ $('#saveProfile').addEventListener('click', async () => {
   state.profile = readProfile();
   try {
     await Store.saveProfile(state.profile);
-    toast('Profile saved. Job scores are updated.');
+    $('#ageFilter').value = String(state.profile.postedWithinDays);
     showTab('jobs');
+    if (state.mcp) searchNow();
+    else toast('Profile saved. Job scores are updated.');
   } catch (e) { toast(`Could not save: ${e.message || e}`); }
 });
 $('#profileForm').addEventListener('submit', (e) => e.preventDefault());
@@ -557,10 +615,53 @@ function renderBoards() {
 $('#q').addEventListener('input', renderBoards);
 $('#loc').addEventListener('input', renderBoards);
 
+// ---------- automatic search ----------
+function renderAuto() {
+  const p = state.profile;
+  const filled = p.skills.length || p.languages.length || p.targetRoles.length;
+  const plan = searchPlan(p);
+  $('#autoPlan').textContent = filled
+    ? `Looking for “${plan.queries.join('”, “')}” in ${plan.location}, posted in the last ${plan.maxAgeDays} day${plan.maxAgeDays === 1 ? '' : 's'}, ${p.yearsExperience ? `around ${p.yearsExperience} years of experience, ` : ''}on LinkedIn, Remotive, Remote OK, Arbeitnow and Jobicy, ${SCHEDULE_TEXT}. New matches are added to your list below.`
+    : 'Fill in your profile and the portal will search the job boards for you.';
+  $('#searchNowBtn').hidden = !(state.mcp && filled);
+  $('#searchNowBtn').disabled = state.searching;
+  $('#searchNowBtn').textContent = state.searching ? 'Searching…' : 'Search now';
+  const s = state.sync;
+  let status;
+  if (Store.mode !== 'cloud') status = h('p', { class: 'muted' }, 'Automatic search saves jobs to your claude.ai account. Open this page while signed in to claude.ai to use it.');
+  else if (!s) status = h('p', { class: 'muted' }, state.searching ? 'The first search is running. Jobs appear here in a few minutes.' : 'No search has run yet. The first one runs at the next scheduled time' + (state.mcp ? ', or press Search now.' : '.'));
+  else {
+    const srcs = Object.entries(s.report || {}).map(([k, v]) => h('span', {}, `${SOURCE_NAMES[k] || k}: ${v.ok ? v.count : 'failed'}`));
+    const when = relTime(s.lastRun) === 'today' ? `today at ${new Date(s.lastRun).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : relTime(s.lastRun);
+    status = h('div', {},
+      s.status === 'ok'
+        ? h('p', { class: 'status-ok' }, `Last search ${when}: ${s.found ?? 0} matching jobs found, ${s.newCount ?? 0} new.`)
+        : h('p', { class: 'status-bad' }, `The last search (${when}) did not finish. ${s.message || ''}`),
+      srcs.length ? h('div', { class: 'srcs small' }, ...srcs) : null);
+  }
+  $('#autoStatus').replaceChildren(status);
+}
+
+async function searchNow() {
+  if (!state.mcp || state.searching) return;
+  state.searching = true;
+  renderAuto();
+  try {
+    await state.mcp.callTool('Claude Code Remote', 'fire_trigger', { trigger_id: TRIGGER_ID });
+    toast('Search started. New jobs appear here in a few minutes.');
+  } catch (e) {
+    toast(e && e.code === 'server_not_connected' ? 'Search now needs the Claude Code connector. The scheduled search still runs.' : 'Could not start a search right now. The scheduled search still runs.');
+  } finally {
+    // The status line updates on its own when the search writes its results.
+    setTimeout(() => { state.searching = false; renderAuto(); }, 5 * 60 * 1000);
+  }
+}
+$('#searchNowBtn').addEventListener('click', searchNow);
+
 // ---------- adding jobs ----------
 $('#addForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const job = makeJob({ title: $('#a-title').value, company: $('#a-company').value, location: $('#a-location').value, url: $('#a-url').value, remote: $('#a-remote').checked, description: $('#a-desc').value });
+  const job = makeJob({ source: 'manual', title: $('#a-title').value, company: $('#a-company').value, location: $('#a-location').value, url: $('#a-url').value, remote: $('#a-remote').checked, description: $('#a-desc').value });
   state.jobs.unshift(job);
   await persist('jobs', job);
   $('#addForm').reset();
@@ -591,7 +692,8 @@ $('#fillBtn').addEventListener('click', async (e) => {
 // ---------- job list ----------
 function scored() {
   const byJob = new Map(state.apps.map((a) => [a.jobId, a]));
-  const jobs = state.jobs.length ? state.jobs : EXAMPLES;
+  const real = state.jobs.filter((j) => !j.hidden);
+  const jobs = real.length || state.jobs.length ? real : EXAMPLES;
   return jobs.map((j) => ({ ...j, fit: scoreJob(j, state.profile), application: byJob.get(j.id) || null }))
     .sort((a, b) => b.fit.eligible - a.fit.eligible || b.fit.score - a.fit.score);
 }
@@ -610,7 +712,8 @@ function jobRow(job) {
       h('div', { class: 'meta' },
         h('span', {}, job.company),
         h('span', {}, job.remote ? `Remote${job.location ? ` · ${job.location}` : ''}` : job.location || 'Location not stated'),
-        h('span', {}, `Added ${relTime(job.postedAt)}`)),
+        h('span', {}, `Posted ${relTime(job.postedAt)}`),
+        job.source && !job.example ? h('span', {}, `via ${SOURCE_NAMES[job.source] || job.source}`) : null),
       h('div', { class: 'chips' },
         h('span', { class: `verdict ${vclass(f)}` }, f.verdict),
         ...f.matchedSkills.slice(0, 6).map((s) => h('span', { class: 'chip hit' }, s)),
@@ -627,26 +730,36 @@ function jobRow(job) {
 function renderJobs() {
   const all = scored();
   const min = Number($('#minFilter').value);
-  const shown = all.filter((j) => (!$('#onlyEligible').checked || j.fit.eligible) && j.fit.score >= min);
+  const days = Number($('#ageFilter').value);
+  const cutoff = days ? Date.now() - days * 86400000 : 0;
+  const shown = all.filter((j) => (!$('#onlyEligible').checked || j.fit.eligible) && j.fit.score >= min && (j.example || !cutoff || !j.postedAt || Date.parse(j.postedAt) >= cutoff));
   const kids = [];
   if (!state.jobs.length) {
     kids.push(h('div', { class: 'notice' },
       h('span', {}, state.profile.skills.length || state.profile.languages.length
-        ? 'These are example postings scored against your profile. Add a real job above and the examples go away.'
+        ? 'These are example postings scored against your profile. They go away when the first search adds real jobs.'
         : 'These are example postings. Fill in your profile to see how each one scores for you.'),
       state.profile.name ? null : h('button', { class: 'btn small', onclick: () => showTab('profile') }, 'Go to profile')));
   } else {
     kids.push(h('p', { class: 'muted small' }, `${shown.length} of ${all.length} jobs, best fit first`));
   }
-  kids.push(...(shown.length ? shown.map(jobRow) : [h('div', { class: 'empty' }, h('h3', {}, 'Nothing matches these filters'), h('p', {}, 'Lower the minimum score or show location mismatches.'))]));
+  kids.push(...(shown.length ? shown.map(jobRow) : [h('div', { class: 'empty' }, h('h3', {}, 'Nothing matches these filters'), h('p', {}, 'Widen the Posted filter, lower the minimum score, or show location mismatches.'))]));
   $('#jobList').replaceChildren(...kids);
 }
 $('#onlyEligible').addEventListener('change', renderJobs);
+$('#ageFilter').addEventListener('change', renderJobs);
 $('#minFilter').addEventListener('input', (e) => { $('#minFilterVal').textContent = e.target.value; renderJobs(); });
 
 async function removeJob(job) {
-  state.jobs = state.jobs.filter((j) => j.id !== job.id);
-  await persist('jobs', job, 'remove');
+  // Found jobs are hidden rather than deleted, so the next search doesn't add them back.
+  const stored = state.jobs.find((j) => j.id === job.id);
+  if (stored && stored.auto) {
+    stored.hidden = true;
+    await persist('jobs', stored);
+  } else {
+    state.jobs = state.jobs.filter((j) => j.id !== job.id);
+    await persist('jobs', job, 'remove');
+  }
   renderJobs();
   toast('Job removed');
 }
@@ -848,13 +961,24 @@ $('#csvBtn').addEventListener('click', async () => {
     Object.assign(state, await Store.load());
   }
   fillProfile(state.profile);
+  $('#ageFilter').value = String(state.profile.postedWithinDays || 0);
   updateCount();
+  Store.watch(
+    (jobs) => { state.jobs = jobs; if (state.tab === 'jobs') renderJobs(); },
+    (sync) => {
+      const isNew = sync && state.sync && sync.lastRun !== state.sync.lastRun;
+      state.sync = sync;
+      if (isNew) { state.searching = false; toast(`Job search finished: ${sync.newCount || 0} new job${sync.newCount === 1 ? '' : 's'}`); }
+      if (state.tab === 'jobs') renderAuto();
+    },
+  );
   let tab = state.profile.name ? 'jobs' : 'profile';
   try { tab = (state.profile.name && localStorage.getItem('jp.tab')) || tab; } catch {}
   showTab(tab);
   if (window.claude && claude.use) {
     claude.use('sample').then((s) => { state.sample = s; $('#fillBtn').hidden = !s; if (state.tab === 'apps') renderApps(); });
     claude.use('downloads').then((d) => { state.downloads = d; if (state.tab === 'apps') renderApps(); });
+    if (Store.mode === 'cloud') claude.use('mcp').then((m) => { state.mcp = m; if (state.tab === 'jobs') renderAuto(); });
   }
 })();
 </script>

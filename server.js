@@ -6,7 +6,8 @@ const path = require('path');
 const crypto = require('crypto');
 
 const { Store, DEFAULT_PROFILE } = require('./lib/store');
-const { searchAll, listSources, normalize } = require('./lib/sources');
+const { listSources, normalize } = require('./lib/sources');
+const { searchForProfile } = require('./lib/autosearch');
 const { scoreJob } = require('./lib/scoring');
 const { buildApplication } = require('./lib/generate');
 
@@ -16,6 +17,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_JOBS = 600;
 const MAX_BODY = 1024 * 1024;
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
+const AUTO_REFRESH_HOURS = Number(process.env.AUTO_REFRESH_HOURS ?? 6);
 
 const store = new Store(process.env.DATA_DIR || path.join(__dirname, 'data'));
 
@@ -68,6 +70,8 @@ function cleanProfile(input) {
   p.yearsExperience = Math.max(0, Math.min(50, Number(input.yearsExperience) || 0));
   p.minScore = Math.max(0, Math.min(100, Number(input.minScore) || DEFAULT_PROFILE.minScore));
   p.workMode = ['any', 'remote', 'hybrid', 'onsite'].includes(input.workMode) ? input.workMode : 'any';
+  p.postedWithinDays = Math.max(1, Math.min(60, Number(input.postedWithinDays) || DEFAULT_PROFILE.postedWithinDays));
+  p.searchKeywords = str(input.searchKeywords, 200);
   p.languages = list(input.languages)
     .map((l) => (typeof l === 'string' ? { name: str(l, 60), level: 'proficient' } : { name: str(l.name, 60), level: str(l.level, 20) || 'proficient' }))
     .filter((l) => l.name);
@@ -88,6 +92,35 @@ function scored(jobs, profile, apps = getApps()) {
   return jobs
     .map((job) => ({ ...job, fit: scoreJob(job, profile), application: byJob.has(job.id) ? { id: byJob.get(job.id).id, status: byJob.get(job.id).status } : null }))
     .sort((a, b) => b.fit.eligible - a.fit.eligible || b.fit.score - a.fit.score);
+}
+
+const hasProfile = (p) => !!(p.skills.length || p.languages.length || p.targetRoles.length);
+
+// Search every source for the profile and merge new postings into the list.
+let running = null;
+async function runSearch(overrides = {}) {
+  if (running) return running;
+  running = (async () => {
+    const profile = getProfile();
+    const { plan, jobs, report } = await searchForProfile(profile, overrides);
+    const existing = getJobs();
+    const known = new Set(existing.map((j) => j.id));
+    const fresh = jobs.filter((j) => !known.has(j.id));
+    // Newest first, and never let the cache grow without bound.
+    const appliedIds = new Set(getApps().map((a) => a.jobId));
+    const merged = [...fresh, ...existing];
+    const keep = merged.filter((j) => appliedIds.has(j.id)).concat(merged.filter((j) => !appliedIds.has(j.id))).slice(0, MAX_JOBS);
+    store.write('jobs', keep);
+    const meta = { lastSearchAt: new Date().toISOString(), plan, report, newCount: fresh.length, found: jobs.length };
+    store.write('meta', meta);
+    const ids = new Set(jobs.map((j) => j.id));
+    return { ...meta, query: plan.queries.join(', '), results: scored(keep.filter((j) => ids.has(j.id)), profile) };
+  })();
+  try {
+    return await running;
+  } finally {
+    running = null;
+  }
 }
 
 async function prepare(job, profile) {
@@ -122,6 +155,8 @@ const routes = {
     claude: !!process.env.ANTHROPIC_API_KEY,
     model: process.env.ANTHROPIC_API_KEY ? process.env.CLAUDE_MODEL || 'claude-opus-5-5' : null,
     counts: { jobs: getJobs().length, applications: getApps().length },
+    lastSearch: store.read('meta', null),
+    autoRefreshHours: AUTO_REFRESH_HOURS,
   }),
 
   'GET /api/profile': () => getProfile(),
@@ -137,20 +172,7 @@ const routes = {
 
   'POST /api/search': async (req) => {
     const body = await readBody(req);
-    const profile = getProfile();
-    const query = str(body.query, 120) || profile.targetRoles[0] || profile.skills.slice(0, 2).join(' ');
-    const location = str(body.location, 120);
-    const { jobs, report } = await searchAll({ query, location, sources: list(body.sources, 20) });
-    const existing = getJobs();
-    const known = new Set(existing.map((j) => j.id));
-    const fresh = jobs.filter((j) => !known.has(j.id));
-    // Newest first, and never let the cache grow without bound.
-    const appliedIds = new Set(getApps().map((a) => a.jobId));
-    const merged = [...fresh, ...existing];
-    const keep = merged.filter((j) => appliedIds.has(j.id)).concat(merged.filter((j) => !appliedIds.has(j.id))).slice(0, MAX_JOBS);
-    store.write('jobs', keep);
-    const ids = new Set(jobs.map((j) => j.id));
-    return { query, report, newCount: fresh.length, results: scored(keep.filter((j) => ids.has(j.id)), profile) };
+    return runSearch({ query: str(body.query, 200), location: str(body.location, 120), sources: list(body.sources, 20) });
   },
 
   'POST /api/jobs/manual': async (req) => {
@@ -289,6 +311,19 @@ if (require.main === module) {
     console.log(`Job sources: ${enabled.join(', ') || 'none'}`);
     console.log(`Cover letters: ${process.env.ANTHROPIC_API_KEY ? 'Claude' : 'built-in template (set ANTHROPIC_API_KEY to use Claude)'}`);
   });
+  // Keep the list fresh while the portal runs: search again whenever the
+  // last search is older than AUTO_REFRESH_HOURS (0 turns this off).
+  if (AUTO_REFRESH_HOURS > 0) {
+    const tick = () => {
+      const last = store.read('meta', null);
+      const stale = !last || Date.now() - Date.parse(last.lastSearchAt) > AUTO_REFRESH_HOURS * 3600000;
+      if (stale && hasProfile(getProfile())) {
+        runSearch().then((r) => console.log(`Auto-search: ${r.newCount} new job(s)`), (e) => console.warn(`Auto-search failed: ${e.message}`));
+      }
+    };
+    setTimeout(tick, 5000);
+    setInterval(tick, 15 * 60 * 1000).unref();
+  }
 }
 
 module.exports = { server, cleanProfile, csvCell };

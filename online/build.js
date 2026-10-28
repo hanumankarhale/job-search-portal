@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
-const MODULES = ['skills', 'text', 'scoring', 'generate'];
+const MODULES = ['skills', 'text', 'scoring', 'generate', 'plan'];
 
 const bundle = [
   'const __mods = {};',
