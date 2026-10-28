@@ -116,3 +116,9 @@ npm test
 | `public/` | The single-page UI, in plain JavaScript |
 
 To add a job board, add an entry to `SOURCES` in `lib/sources.js` that returns raw jobs with `title`, `company`, `location`, `remote`, `url` and `description`.
+
+## Hosted version
+
+`online/` holds a single-page version that runs as a claude.ai artifact. Build it with `node online/build.js`, which bundles the same `lib/` scoring and letter code into `online/dist/job-portal.html`.
+
+The hosted page can't call job board APIs: the artifact sandbox blocks requests to outside sites. Instead it links straight to searches on LinkedIn, Naukri, Indeed, foundit, Glassdoor, Google Jobs, Remote OK and Remotive, built from your profile. You paste the jobs you like back in to score them. Signed in on claude.ai, your profile, jobs and applications are saved privately to your account. Claude can rewrite each cover letter from inside the page.
